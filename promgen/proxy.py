@@ -8,6 +8,7 @@ from http import HTTPStatus
 from urllib.parse import urljoin
 
 import requests
+from django.contrib.auth.mixins import LoginRequiredMixin
 from django.http import HttpResponse, JsonResponse
 from django.utils.translation import gettext as _
 from django.views.generic import View
@@ -267,7 +268,7 @@ def get_affected_obj_by_matchers(matchers):
     return affected_projects, affected_services
 
 
-class ProxySilences(View):
+class ProxySilences(LoginRequiredMixin, View):
     def get(self, request):
         try:
             url = urljoin(util.setting("alertmanager:url"), "/api/v2/silences")
@@ -410,7 +411,7 @@ def get_uneditable_obj_by_silence_matchers(matchers, user):
 
 
 class ProxySilencesV2(APIView):
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
         serializer = serializers.SilenceSerializer(
@@ -489,7 +490,7 @@ class ProxySilencesV2(APIView):
         )
 
 
-class ProxyDeleteSilence(View):
+class ProxyDeleteSilence(LoginRequiredMixin, View):
     def delete(self, request, silence_id):
         url = urljoin(util.setting("alertmanager:url"), f"/api/v2/silence/{silence_id}")
         # First, check if the silence exists

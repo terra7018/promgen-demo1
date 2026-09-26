@@ -36,7 +36,6 @@ from guardian.shortcuts import assign_perm, get_perms, remove_perm
 from prometheus_client.core import CounterMetricFamily, GaugeMetricFamily
 from prometheus_client.parser import text_string_to_metric_families
 from rest_framework.negotiation import DefaultContentNegotiation
-from rest_framework.permissions import IsAdminUser
 from rest_framework.views import APIView
 
 import promgen.templatetags.promgen as macro
@@ -1428,12 +1427,10 @@ class _IgnoreAcceptNegotiation(DefaultContentNegotiation):
 
 class _LegacyApiView(APIView):
     content_negotiation_class = _IgnoreAcceptNegotiation
-    permission_classes = [IsAdminUser]
+    permission_classes = [permissions.IsSuperuser]
 
     def initial(self, request, *args, **kwargs):
-        # DRF authentication (e.g. token auth) runs in APIView.initial, so we
-        # refresh the thread-local user used by audit logging here. The
-        # middleware only sees the Django-session user.
+        # Token authentication happens here, after PromgenMiddleware has run
         super().initial(request, *args, **kwargs)
         set_current_user(request.user)
 

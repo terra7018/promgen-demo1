@@ -58,7 +58,7 @@ class OwnerTransferTest(tests.PromgenTest):
         group = models.Group.objects.create(name="Transfer Admins")
         group.user_set.add(self.previous_owner)
         assign_perm("service_admin", group, service)
-        token = models.AuthToken.objects.get(user=self.admin).token_key
+        token = models.AuthToken.objects.get(user=self.previous_owner).token_key
 
         response = self.client.patch(
             reverse("api-v2:service-detail", kwargs={"id": service.pk}),
@@ -116,7 +116,7 @@ class OwnerTransferTest(tests.PromgenTest):
             service=service,
             shard_id=1,
         )
-        self.client.force_login(self.admin)
+        self.client.force_login(self.previous_owner)
 
         response = self.client.post(
             reverse("project-update", kwargs={"pk": project.pk}),
@@ -176,7 +176,7 @@ class OwnerTransferTest(tests.PromgenTest):
 
     def test_web_service_transfer_revokes_previous_admin(self):
         service = models.Service.objects.create(name="Transfer Service", owner=self.previous_owner)
-        self.client.force_login(self.admin)
+        self.client.force_login(self.previous_owner)
 
         response = self.client.post(
             reverse("service-update", kwargs={"pk": service.pk}),

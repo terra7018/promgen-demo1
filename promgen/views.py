@@ -453,7 +453,7 @@ class NotifierUpdate(PromgenGuardianPermissionMixin, UpdateView):
 
     def post(self, request, pk):
         if "filter.pk" in request.POST:
-            f = models.Filter.objects.get(pk=request.POST["filter.pk"])
+            f = get_object_or_404(self.get_object().filter_set, pk=request.POST["filter.pk"])
             f.delete()
             messages.success(
                 request,

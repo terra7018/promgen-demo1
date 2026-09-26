@@ -418,3 +418,23 @@ class WebTests(PromgenTest):
             ).exists(),
             "Required custom label value should be deleted within the service deletion process",
         )
+
+    def test_notifier_delete_filter_scoped_to_notifier(self):
+        assign_perm("project_editor", self.user, models.Project.objects.get(pk=1))
+        other_filter = models.Filter.objects.get(pk=1)
+        own_filter = models.Filter.objects.create(sender_id=2, name="severity", value="warning")
+        url = reverse("notifier-edit", kwargs={"pk": 2})
+
+        response = self.client.post(url, {"filter.pk": other_filter.pk})
+        self.assertEqual(response.status_code, 404)
+        self.assertTrue(
+            models.Filter.objects.filter(pk=other_filter.pk).exists(),
+            "Filter belonging to another notifier must not be deleted",
+        )
+
+        response = self.client.post(url, {"filter.pk": 999999})
+        self.assertEqual(response.status_code, 404)
+
+        response = self.client.post(url, {"filter.pk": own_filter.pk, "next": "/"})
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(models.Filter.objects.filter(pk=own_filter.pk).exists())

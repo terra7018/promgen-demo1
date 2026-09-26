@@ -229,6 +229,31 @@ class RestAPITest(tests.PromgenTest):
         )
 
     @override_settings(PROMGEN=tests.SETTINGS)
+    def test_rest_notifier_delete_filter_scoped_to_notifier(self):
+        user = User.objects.get(username="demo")
+        token = models.AuthToken.objects.filter(user=user).first().token_key
+        assign_perm("project_editor", user, models.Project.objects.get(pk=1))
+        other_filter = models.Filter.objects.get(pk=1)
+        own_filter = models.Filter.objects.create(sender_id=2, name="severity", value="warning")
+
+        response = self.client.delete(
+            reverse("api-v2:sender-delete-filter", kwargs={"id": 2, "filter_id": other_filter.pk}),
+            HTTP_AUTHORIZATION=f"Token {token}",
+        )
+        self.assertEqual(response.status_code, 204)
+        self.assertTrue(
+            models.Filter.objects.filter(pk=other_filter.pk).exists(),
+            "Filter belonging to another notifier must not be deleted",
+        )
+
+        response = self.client.delete(
+            reverse("api-v2:sender-delete-filter", kwargs={"id": 2, "filter_id": own_filter.pk}),
+            HTTP_AUTHORIZATION=f"Token {token}",
+        )
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(models.Filter.objects.filter(pk=own_filter.pk).exists())
+
+    @override_settings(PROMGEN=tests.SETTINGS)
     def test_rest_rule(self):
         cases = tests.Data("cases", "test_rest_rule.csv").csv()
         for case in cases:

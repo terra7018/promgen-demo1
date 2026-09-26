@@ -3,10 +3,13 @@
 
 import argparse
 import hashlib
+import ipaddress
 import math
-from urllib.parse import urlsplit
+import socket
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
+import requests.adapters
 from django.conf import settings
 from django.db.models import F
 from django.http import HttpResponse
@@ -22,9 +25,10 @@ ACCEPT_HEADER = (
 
 
 def post(url, data=None, json=None, **kwargs):
+    session = kwargs.pop("session", requests)
     headers = kwargs.setdefault("headers", {})
     headers["User-Agent"] = USER_AGENT
-    return requests.post(url, data=data, json=json, **kwargs)
+    return session.post(url, data=data, json=json, **kwargs)
 
 
 def get(url, params=None, **kwargs):
@@ -57,7 +61,154 @@ def scrape(url, params=None, **kwargs):
     # in the Host header to make it match how Prometheus scrapes
     # https://github.com/prometheus/prometheus/blob/2b55017379786873dc00315ffe65e22ad7026abb/scrape/target.go#L375-L387
     headers["Host"] = urlsplit(url).netloc
-    return requests.get(url, params=params, **kwargs)
+    session = kwargs.pop("session", requests)
+    return session.get(url, params=params, **kwargs)
+
+
+EGRESS_SCHEMES = ("http", "https")
+
+
+class EgressError(ValueError):
+    """
+    Raised when a user supplied destination URL is not allowed to be requested
+    """
+
+
+def resolve_hostname(hostname):
+    """
+    Resolve a hostname to the list of IP addresses it points at
+    """
+    try:
+        infos = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as e:
+        raise EgressError(f"Unable to resolve host {hostname}") from e
+    return [ipaddress.ip_address(info[4][0]) for info in infos]
+
+
+def _egress_blocked(address, allow_private):
+    if address.version == 6 and address.ipv4_mapped:
+        address = address.ipv4_mapped
+    if (
+        address.is_loopback
+        or address.is_link_local
+        or address.is_unspecified
+        or address.is_multicast
+        or address.is_reserved
+    ):
+        return True
+    return address.is_private and not allow_private
+
+
+def validate_egress_url(url):
+    """
+    Validate a user supplied destination before Promgen makes a request to it
+
+    Only http(s) URLs without embedded credentials are allowed, and the host
+    must not resolve to loopback, link-local, or (unless configured via the
+    ``egress:allow_private`` setting) private addresses. Hosts listed under
+    ``egress:allowed_hosts`` are always permitted.
+
+    Returns the list of addresses that were validated so that callers can pin
+    the connection to one of them (empty for allowlisted hosts).
+    """
+    if not isinstance(url, str):
+        raise EgressError("Invalid URL")
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError as e:
+        raise EgressError(f"Invalid URL: {e}") from e
+
+    if parts.scheme not in EGRESS_SCHEMES:
+        raise EgressError(f"Unsupported scheme: {parts.scheme or 'none'}")
+    if parts.username is not None or parts.password is not None:
+        raise EgressError("Credentials in URL are not allowed")
+    if port is not None and not 0 < port < 65536:
+        raise EgressError(f"Invalid port: {port}")
+
+    hostname = parts.hostname
+    if not hostname:
+        raise EgressError("Missing host")
+
+    if hostname in setting("egress:allowed_hosts", default=[]):
+        return []
+
+    allow_private = bool(setting("egress:allow_private", default=False))
+    try:
+        addresses = [ipaddress.ip_address(hostname)]
+    except ValueError:
+        addresses = resolve_hostname(hostname)
+
+    for address in addresses:
+        if _egress_blocked(address, allow_private):
+            raise EgressError(f"Destination {hostname} ({address}) is not allowed")
+    return addresses
+
+
+class PinnedAdapter(requests.adapters.HTTPAdapter):
+    """
+    Transport adapter that connects to a previously resolved address
+
+    Connecting to the address that was validated (instead of resolving the
+    hostname a second time) prevents DNS rebinding from redirecting the
+    request to a blocked destination. The original hostname is kept for the
+    Host header, SNI and certificate verification.
+    """
+
+    def __init__(self, hostname, address, **kwargs):
+        self.hostname = hostname
+        self.address = address
+        super().__init__(**kwargs)
+
+    def send(self, request, **kwargs):
+        parts = urlsplit(request.url)
+        host = f"[{self.address}]" if self.address.version == 6 else str(self.address)
+        netloc = host if parts.port is None else f"{host}:{parts.port}"
+        request.headers.setdefault("Host", parts.netloc)
+        request.url = urlunsplit(parts._replace(netloc=netloc))
+        return super().send(request, **kwargs)
+
+    def build_connection_pool_key_attributes(self, request, verify, cert=None):
+        host_params, pool_kwargs = super().build_connection_pool_key_attributes(
+            request, verify, cert
+        )
+        if host_params["scheme"] == "https":
+            pool_kwargs["server_hostname"] = self.hostname
+            pool_kwargs["assert_hostname"] = self.hostname
+        return host_params, pool_kwargs
+
+
+def egress_session(url):
+    """
+    Validate a user supplied destination and return a session pinned to the
+    address that passed validation
+    """
+    addresses = validate_egress_url(url)
+    session = requests.Session()
+    if addresses:
+        hostname = urlsplit(url).hostname
+        adapter = PinnedAdapter(hostname, addresses[0])
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+    return session
+
+
+def egress_post(url, **kwargs):
+    """
+    POST to a user supplied destination after validating it
+    """
+    session = egress_session(url)
+    kwargs.setdefault("allow_redirects", False)
+    return post(url, session=session, **kwargs)
+
+
+def egress_scrape(url, **kwargs):
+    """
+    Scrape a user supplied target after validating it
+    """
+    session = egress_session(url)
+    kwargs.setdefault("allow_redirects", False)
+    return scrape(url, session=session, **kwargs)
 
 
 def setting(key, default=None, domain=None):

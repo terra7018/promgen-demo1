@@ -1,6 +1,8 @@
 # Copyright (c) 2022 LINE Corporation
 # These sources are released under the terms of the MIT license: see LICENSE
+from django.contrib.messages import WARNING, get_messages
 from django.urls import reverse
+from django.utils.html import escape
 from guardian.shortcuts import assign_perm, remove_perm
 
 from promgen import models, views
@@ -438,3 +440,35 @@ class WebTests(PromgenTest):
         response = self.client.post(url, {"filter.pk": own_filter.pk, "next": "/"})
         self.assertEqual(response.status_code, 302)
         self.assertFalse(models.Filter.objects.filter(pk=own_filter.pk).exists())
+
+    def test_permission_delete_transfer_message_escapes_html(self):
+        admin = self.force_login(username="admin")
+        service = models.Service.objects.get(pk=1)
+        payload = '<img src=x onerror="alert(1)">'
+        project = models.Project.objects.create(
+            name=payload, owner=self.user, service=service, shard_id=1
+        )
+        assign_perm("project_admin", self.user, project)
+        assign_perm("service_editor", self.user, service)
+
+        response = self.client.post(
+            reverse("permission-delete"),
+            {
+                "id": service.pk,
+                "model": "service",
+                "perm-type": "user",
+                "username": self.user.username,
+                "remove_sub_permissions": "on",
+                "next": reverse("service-detail", kwargs={"pk": service.pk}),
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+
+        project.refresh_from_db()
+        self.assertEqual(project.owner, admin, "Project ownership transferred to service owner")
+
+        warnings = [str(m) for m in get_messages(response.wsgi_request) if m.level == WARNING]
+        self.assertEqual(len(warnings), 1, "One ownership transfer warning message")
+        self.assertNotIn(payload, warnings[0], "Raw HTML payload must not appear in message")
+        self.assertIn(escape(payload), warnings[0], "Project name is HTML-escaped in message")
+        self.assertIn("<ul v-pre><li>", warnings[0], "Message markup is preserved")

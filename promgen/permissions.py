@@ -49,6 +49,11 @@ class PromgenModelPermissions(BasePermission):
             return all(request.user.has_perm(perm) for perm in perm_list)
 
 
+class IsSuperuser(BasePermission):
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_superuser)
+
+
 class ReadOnlyForAuthenticatedUserOrIsSuperuser(BasePermission):
     """
     Customize Django REST Framework's base permission class to only allow read-only access for

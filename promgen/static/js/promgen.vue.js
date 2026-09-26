@@ -86,7 +86,10 @@ const app = Vue.createApp({
             tgt.classList.toggle('collapse');
         },
         expireSilence(id) {
-            fetch(`/proxy/v1/silences/${id}`, { method: 'DELETE' })
+            const headers = {
+                'X-CSRFToken': document.querySelector('input[name="csrf_token"]').value,
+            };
+            fetch(`/proxy/v1/silences/${id}`, { method: 'DELETE', headers })
                 .then(response => {
                     if (response.ok) {
                         location.reload();
@@ -120,7 +123,17 @@ const app = Vue.createApp({
         },
         fetchSilences: function () {
             fetch('/proxy/v1/silences')
-                .then(response => response.json())
+                .then(response => {
+                    if (!response.ok) {
+                        return response.json().then(result => {
+                            if (result.messages) {
+                                globalStore.setMessages(result.messages);
+                            }
+                            return [];
+                        });
+                    }
+                    return response.json();
+                })
                 .then(response => {
                     let silences = response.sort(silence => silence.startsAt);
 

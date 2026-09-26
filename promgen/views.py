@@ -8,6 +8,7 @@ import json
 import logging
 import platform
 import time
+import urllib.parse
 from itertools import chain
 
 import prometheus_client
@@ -25,7 +26,7 @@ from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
 from django.urls import reverse
-from django.utils.safestring import mark_safe
+from django.utils.html import format_html, format_html_join
 from django.utils.translation import gettext as _
 from django.views.generic import DetailView, ListView, UpdateView, View
 from django.views.generic.base import RedirectView, TemplateView
@@ -35,6 +36,8 @@ from guardian.models import GroupObjectPermission
 from guardian.shortcuts import assign_perm, get_perms, remove_perm
 from prometheus_client.core import CounterMetricFamily, GaugeMetricFamily
 from prometheus_client.parser import text_string_to_metric_families
+from rest_framework.negotiation import DefaultContentNegotiation
+from rest_framework.views import APIView
 
 import promgen.templatetags.promgen as macro
 from promgen import (
@@ -50,6 +53,7 @@ from promgen import (
     util,
 )
 from promgen.forms import GroupMemberForm, UserPermissionForm
+from promgen.middleware import set_current_user
 from promgen.mixins import PromgenGuardianPermissionMixin
 from promgen.shortcuts import resolve_domain
 
@@ -643,7 +647,7 @@ class ProjectDetail(PromgenGuardianPermissionMixin, DetailView):
         # Filter out any non-remote sources because we don't support linking local farm
         sources = [source for source in sources if source[1].remote]
         # Sort the farm sources by name alphabetically
-        sources = sorted(sources, key=lambda source: (source[0]))
+        sources = sorted(sources, key=lambda source: source[0])
 
         context["sources"] = sources
         context["url_form"] = forms.URLForm()
@@ -920,50 +924,62 @@ class ExporterScrape(LoginRequiredMixin, View):
 
         farm = getattr(project, "farm", None)
 
-        # So we have a mutable dictionary
-        data = request.POST.dict()
+        scheme = request.POST.get("scheme", "http")
+        if scheme not in util.EGRESS_SCHEMES:
+            return JsonResponse({"error": "Invalid scheme"})
+
+        try:
+            port = int(request.POST.get("port", ""))
+        except ValueError:
+            return JsonResponse({"error": "Invalid port"})
+        if not 0 < port < 65536:
+            return JsonResponse({"error": "Invalid port"})
 
         # The default __metrics_path__ for Prometheus is /metrics so we need to
         # manually add it here in the case it's not set for our test
-        if not data.setdefault("path", "/metrics"):
-            data["path"] = "/metrics"
+        path = urllib.parse.urlsplit(request.POST.get("path") or "/metrics")
+        if path.scheme or path.netloc or not path.path.startswith("/"):
+            return JsonResponse({"error": "Invalid path"})
+
+        def target(host):
+            netloc = f"[{host.name}]" if ":" in host.name else host.name
+            return urllib.parse.urlunsplit((scheme, f"{netloc}:{port}", path.path, path.query, ""))
 
         def query():
-            futures = []
+            futures = {}
             with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
                 for host in farm.host_set.all():
-                    futures.append(
-                        executor.submit(
-                            util.scrape,
-                            "{scheme}://{host}:{port}{path}".format(host=host.name, **data),
-                        )
-                    )
+                    url = target(host)
+                    futures[executor.submit(util.egress_scrape, url)] = url
                 try:
                     for future in concurrent.futures.as_completed(
                         futures, timeout=settings.PROMGEN_EXPORTER_SCRAPE_TIMEOUT
                     ):
+                        url = futures[future]
                         try:
                             result = future.result()
                             result.raise_for_status()
                             metrics = list(text_string_to_metric_families(result.text))
                             yield (
-                                result.url,
+                                url,
                                 {
                                     "status_code": result.status_code,
                                     "metric_count": len(list(metrics)),
                                 },
                             )
+                        except util.EgressError as e:
+                            yield url, str(e)
                         except ValueError as e:
-                            yield result.url, f"Unable to parse metrics: {e}"
-                        except requests.ConnectionError as e:
+                            yield url, f"Unable to parse metrics: {e}"
+                        except requests.ConnectionError:
                             logger.warning("Error connecting to server")
-                            yield e.request.url, "Error connecting to server"
+                            yield url, "Error connecting to server"
                         except requests.RequestException as e:
                             logger.warning("Error with response")
-                            yield e.request.url, str(e)
+                            yield url, str(e)
                         except Exception:
                             logger.exception("Unknown Exception")
-                            yield "Unknown URL", "Unknown error"
+                            yield url, "Unknown error"
                 except concurrent.futures.TimeoutError:
                     for future in futures:
                         future.cancel()
@@ -1066,6 +1082,7 @@ class ProjectUpdate(PromgenGuardianPermissionMixin, UpdateView):
         context["shard_list"] = models.Shard.objects.all()
         return context
 
+    @transaction.atomic
     def form_valid(self, form):
         initial = self.get_object()
         if "owner" in form.changed_data or "service" in form.changed_data:
@@ -1081,8 +1098,14 @@ class ProjectUpdate(PromgenGuardianPermissionMixin, UpdateView):
                         "service", _("You do not have permission to change the service.")
                     )
                 return self.form_invalid(form)
+        if "owner" in form.changed_data or "service" in form.changed_data:
             assign_perm("project_admin", form.cleaned_data["owner"], form.instance)
-        return super().form_valid(form)
+        response = super().form_valid(form)
+        if "owner" in form.changed_data:
+            if initial.owner != self.request.user:
+                remove_perm("project_admin", initial.owner, form.instance)
+            signals.add_default_owner_subscription(form.instance, form.cleaned_data["owner"])
+        return response
 
 
 class ServiceUpdate(PromgenGuardianPermissionMixin, UpdateView):
@@ -1091,15 +1114,20 @@ class ServiceUpdate(PromgenGuardianPermissionMixin, UpdateView):
     form_class = forms.ServiceUpdate
     model = models.Service
 
+    @transaction.atomic
     def form_valid(self, form):
         if "owner" in form.changed_data:
-            if not (
-                self.request.user.is_superuser or self.request.user.id == form.initial["owner"]
-            ):
+            original_owner = self.get_object().owner
+            if not (self.request.user.is_superuser or self.request.user == original_owner):
                 form.add_error("owner", _("You do not have permission to change the owner."))
                 return self.form_invalid(form)
+        response = super().form_valid(form)
+        if "owner" in form.changed_data:
             assign_perm("service_admin", form.cleaned_data["owner"], form.instance)
-        return super().form_valid(form)
+            if original_owner != self.request.user:
+                remove_perm("service_admin", original_owner, form.instance)
+            signals.add_default_owner_subscription(form.instance, form.cleaned_data["owner"])
+        return response
 
 
 class RuleDetail(PromgenGuardianPermissionMixin, DetailView):
@@ -1415,7 +1443,24 @@ class HostRegister(PromgenGuardianPermissionMixin, FormView):
         return get_object_or_404(models.Farm, id=self.kwargs["pk"])
 
 
-class ApiConfig(View):
+class _IgnoreAcceptNegotiation(DefaultContentNegotiation):
+    # These views build their own HttpResponse, so the Accept header must not
+    # cause DRF to reject the request with 406
+    def select_renderer(self, request, renderers, format_suffix=None):
+        return renderers[0], renderers[0].media_type
+
+
+class _LegacyApiView(APIView):
+    content_negotiation_class = _IgnoreAcceptNegotiation
+    permission_classes = [permissions.IsSuperuser]
+
+    def initial(self, request, *args, **kwargs):
+        # Token authentication happens here, after PromgenMiddleware has run
+        super().initial(request, *args, **kwargs)
+        set_current_user(request.user)
+
+
+class ApiConfig(_LegacyApiView):
     def get(self, request):
         return HttpResponse(prometheus.render_config(), content_type="application/json")
 
@@ -1438,7 +1483,7 @@ class ApiQueue(View):
         return HttpResponse("OK", status=202)
 
 
-class _ExportRules(View):
+class _ExportRules(_LegacyApiView):
     def format(self, rules=None, name="promgen"):
         content = prometheus.render_rules(rules)
         response = HttpResponse(content)
@@ -1461,7 +1506,7 @@ class RuleExport(_ExportRules):
         return self.format(rules)
 
 
-class URLConfig(View):
+class URLConfig(_LegacyApiView):
     def get(self, request):
         return HttpResponse(prometheus.render_urls(), content_type="application/json")
 
@@ -2099,17 +2144,20 @@ class PermissionDelete(PromgenGuardianPermissionMixin, View):
             The previous owner (John Smith) had its permissions removed.
         """
 
-        projects = "<ul v-pre>" + "".join(f"<li>{p}</li>" for p in projects) + "</ul>"
-        msg = _(
-            "Transferred ownership of these projects to the parent service's owner ({owner}):"
-            + "{projects}"
-            + "The previous owner ({previous_owner}) had its permissions removed."
-        ).format(
+        projects = format_html(
+            "<ul v-pre>{}</ul>",
+            format_html_join("", "<li>{}</li>", ((p,) for p in projects)),
+        )
+        return format_html(
+            _(
+                "Transferred ownership of these projects to the parent service's owner ({owner}):"
+                + "{projects}"
+                + "The previous owner ({previous_owner}) had its permissions removed."
+            ),
             owner=self.get_object().owner.username,
             projects=projects,
             previous_owner=previous_owner,
         )
-        return mark_safe(msg)
 
 
 class GroupList(LoginRequiredMixin, ListView):

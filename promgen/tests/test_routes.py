@@ -1,5 +1,6 @@
 # Copyright (c) 2017 LINE Corporation
 # These sources are released under the terms of the MIT license: see LICENSE
+import ipaddress
 from unittest import mock
 
 import requests
@@ -57,7 +58,7 @@ class RouteTests(tests.PromgenTest):
         )
         self.assertCount(models.Host, 6, "Original 4 hosts and two new ones")
 
-    @mock.patch("requests.get")
+    @mock.patch("requests.Session.get")
     def test_scrape(self, mock_get):
         shard = models.Shard.objects.create(name="test_scrape_shard")
         service = models.Service.objects.create(name="test_scrape_service", owner=self.user)
@@ -96,6 +97,34 @@ class RouteTests(tests.PromgenTest):
             response = self.client.post(reverse("exporter-scrape", kwargs={"pk": project.pk}), body)
             self.assertRoute(response, views.ExporterScrape, 200)
             self.assertEqual(mock_get.call_args[0][0], url)
+            self.assertFalse(mock_get.call_args[1]["allow_redirects"])
+
+        # Attempts to change the destination through scheme/port/path are rejected
+        mock_get.reset_mock()
+        rejected = [
+            {"job": "foo", "port": 8000, "scheme": "file"},
+            {"job": "foo", "port": "8000@evil.example.com", "scheme": "http"},
+            {"job": "foo", "port": 8000, "scheme": "http", "path": "@169.254.169.254/latest"},
+            {"job": "foo", "port": 8000, "scheme": "http", "path": "//169.254.169.254/latest"},
+        ]
+        for body in rejected:
+            response = self.client.post(reverse("exporter-scrape", kwargs={"pk": project.pk}), body)
+            self.assertRoute(response, views.ExporterScrape, 200)
+            self.assertIn("error", response.json())
+        mock_get.assert_not_called()
+
+        # Hosts resolving to internal addresses are reported instead of scraped
+        with mock.patch(
+            "promgen.util.resolve_hostname",
+            return_value=[ipaddress.ip_address("169.254.169.254")],
+        ):
+            response = self.client.post(
+                reverse("exporter-scrape", kwargs={"pk": project.pk}),
+                {"job": "foo", "port": 8000, "scheme": "http"},
+            )
+        self.assertRoute(response, views.ExporterScrape, 200)
+        self.assertIn("not allowed", response.json()["http://example.com:8000/metrics"])
+        mock_get.assert_not_called()
 
     def test_failed_permission(self):
         # Test for redirect

@@ -1,7 +1,9 @@
 # Copyright (c) 2017 LINE Corporation
 # These sources are released under the terms of the MIT license: see LICENSE
 import csv
+import ipaddress
 import json
+from unittest import mock
 
 import yaml
 from django.conf import settings
@@ -35,6 +37,18 @@ class PromgenTest(TestCase):
     longMessage = True
     maxDiff = None
     fixtures = ["testcases.yaml"]
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        # Test data uses hostnames that do not exist, so pretend they all resolve
+        # to a public address instead of hitting DNS
+        patcher = mock.patch(
+            "promgen.util.resolve_hostname",
+            return_value=[ipaddress.ip_address("93.184.216.34")],
+        )
+        patcher.start()
+        cls.addClassCleanup(patcher.stop)
 
     def fireAlert(self, source="alertmanager.json", data=None):
         if data is None:

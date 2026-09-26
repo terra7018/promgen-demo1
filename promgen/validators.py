@@ -7,6 +7,8 @@ from dateutil import parser
 from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator, URLValidator
 
+from promgen import util
+
 # See definition of duration field
 # https://prometheus.io/docs/prometheus/latest/configuration/configuration/#configuration-file
 
@@ -82,6 +84,17 @@ hostname = RegexValidator(
 scraped_url = URLValidator(
     schemes=["http", "https"],
 )
+
+
+def egress_url(value):
+    """
+    Validate a user supplied URL that Promgen will send requests to
+    """
+    try:
+        util.validate_egress_url(value)
+    except util.EgressError as e:
+        raise ValidationError(str(e))
+
 
 # https://support.pagerduty.com/main/docs/api-access-keys
 integration_key = RegexValidator(

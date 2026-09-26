@@ -108,6 +108,49 @@ class OwnerTransferTest(tests.PromgenTest):
         self.assertIn("project_admin", get_user_perms(self.new_owner, project))
         self.assertTrue(models.Sender.objects.filter(pk=subscription.pk, enabled=False).exists())
 
+    def test_api_self_initiated_service_transfer_keeps_previous_admin(self):
+        service = models.Service.objects.create(name="Transfer Service", owner=self.previous_owner)
+        token = models.AuthToken.objects.get(user=self.previous_owner).token_key
+
+        response = self.client.patch(
+            reverse("api-v2:service-detail", kwargs={"id": service.pk}),
+            data={"owner": self.new_owner.pk},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        service.refresh_from_db()
+        self.assertEqual(service.owner, self.new_owner)
+        self.assertIn("service_admin", get_user_perms(self.previous_owner, service))
+        self.assertIn("service_admin", get_user_perms(self.new_owner, service))
+
+    def test_web_self_initiated_project_transfer_keeps_previous_admin(self):
+        service = models.Service.objects.create(name="Transfer Service", owner=self.admin)
+        project = models.Project.objects.create(
+            name="Transfer Project",
+            owner=self.previous_owner,
+            service=service,
+            shard_id=1,
+        )
+        self.client.force_login(self.previous_owner)
+
+        response = self.client.post(
+            reverse("project-update", kwargs={"pk": project.pk}),
+            {
+                "name": project.name,
+                "owner": self.new_owner.pk,
+                "service": service.pk,
+                "shard": project.shard_id,
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        project.refresh_from_db()
+        self.assertEqual(project.owner, self.new_owner)
+        self.assertIn("project_admin", get_user_perms(self.previous_owner, project))
+        self.assertIn("project_admin", get_user_perms(self.new_owner, project))
+
     def test_web_project_transfer_revokes_previous_admin(self):
         service = models.Service.objects.create(name="Transfer Service", owner=self.admin)
         project = models.Project.objects.create(

@@ -1147,7 +1147,8 @@ class ProjectViewSet(
         super().perform_update(serializer)
 
         if owner_changed:
-            remove_perm("project_admin", original_owner, project)
+            if original_owner != self.request.user:
+                remove_perm("project_admin", original_owner, project)
             signals.add_default_owner_subscription(project, new_owner)
 
     def destroy(self, request, *args, **kwargs):
@@ -1374,7 +1375,8 @@ class ServiceViewSet(
 
         if owner_changed:
             assign_perm("service_admin", new_owner, service)
-            remove_perm("service_admin", original_owner, service)
+            if original_owner != self.request.user:
+                remove_perm("service_admin", original_owner, service)
             signals.add_default_owner_subscription(service, new_owner)
 
     def destroy(self, request, *args, **kwargs):

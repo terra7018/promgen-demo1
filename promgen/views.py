@@ -1086,7 +1086,8 @@ class ProjectUpdate(PromgenGuardianPermissionMixin, UpdateView):
             assign_perm("project_admin", form.cleaned_data["owner"], form.instance)
         response = super().form_valid(form)
         if "owner" in form.changed_data:
-            remove_perm("project_admin", initial.owner, form.instance)
+            if initial.owner != self.request.user:
+                remove_perm("project_admin", initial.owner, form.instance)
             signals.add_default_owner_subscription(form.instance, form.cleaned_data["owner"])
         return response
 
@@ -1107,7 +1108,8 @@ class ServiceUpdate(PromgenGuardianPermissionMixin, UpdateView):
         response = super().form_valid(form)
         if "owner" in form.changed_data:
             assign_perm("service_admin", form.cleaned_data["owner"], form.instance)
-            remove_perm("service_admin", original_owner, form.instance)
+            if original_owner != self.request.user:
+                remove_perm("service_admin", original_owner, form.instance)
             signals.add_default_owner_subscription(form.instance, form.cleaned_data["owner"])
         return response
 

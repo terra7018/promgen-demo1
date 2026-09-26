@@ -35,7 +35,9 @@ class RestAPITest(tests.PromgenTest):
 
             if user:
                 user = User.objects.get(username=case["user"])
-                token = models.AuthToken.objects.filter(user=user).first().token_key
+                token = (
+                    models.AuthToken.objects.filter(user=user).order_by("created").first().token_key
+                )
                 for permission in permissions:
                     perm = permission["codename"]
                     app_label, model_name = permission["model"].split(".")

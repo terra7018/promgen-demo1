@@ -5,7 +5,7 @@ import logging
 
 from django import forms
 
-from promgen import util
+from promgen import util, validators
 from promgen.notification import NotificationBase
 
 logger = logging.getLogger(__name__)
@@ -15,6 +15,7 @@ class FormAlertmanager(forms.Form):
     value = forms.URLField(
         required=True,
         label="URL",
+        validators=[validators.egress_url],
         help_text="URL to Alertmanager's Alerts API end point.",
     )
     alias = forms.CharField(
@@ -43,4 +44,4 @@ class NotificationAlertmanager(NotificationBase):
                 }
                 for alert in alerts
             ]
-            util.post(url, json=alertmanager_json).raise_for_status()
+            util.egress_post(url, json=alertmanager_json).raise_for_status()

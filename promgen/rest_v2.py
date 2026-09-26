@@ -1451,10 +1451,7 @@ class UserViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
     )
     @action(detail=False, methods=["post"], url_path="me/notifiers")
     def register_user_notifier(self, request):
-        serializer = serializers.RegisterNotifierSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        if serializer.validated_data.get("sender") == "promgen.notification.user":
+        if request.data.get("sender") == "promgen.notification.user":
             return Response(
                 {"detail": "Cannot register a promgen.notification.user notifier for a user."},
                 status=HTTPStatus.BAD_REQUEST,

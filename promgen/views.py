@@ -8,6 +8,7 @@ import json
 import logging
 import platform
 import time
+import urllib.parse
 from itertools import chain
 
 import prometheus_client
@@ -646,7 +647,7 @@ class ProjectDetail(PromgenGuardianPermissionMixin, DetailView):
         # Filter out any non-remote sources because we don't support linking local farm
         sources = [source for source in sources if source[1].remote]
         # Sort the farm sources by name alphabetically
-        sources = sorted(sources, key=lambda source: (source[0]))
+        sources = sorted(sources, key=lambda source: source[0])
 
         context["sources"] = sources
         context["url_form"] = forms.URLForm()
@@ -923,50 +924,62 @@ class ExporterScrape(LoginRequiredMixin, View):
 
         farm = getattr(project, "farm", None)
 
-        # So we have a mutable dictionary
-        data = request.POST.dict()
+        scheme = request.POST.get("scheme", "http")
+        if scheme not in util.EGRESS_SCHEMES:
+            return JsonResponse({"error": "Invalid scheme"})
+
+        try:
+            port = int(request.POST.get("port", ""))
+        except ValueError:
+            return JsonResponse({"error": "Invalid port"})
+        if not 0 < port < 65536:
+            return JsonResponse({"error": "Invalid port"})
 
         # The default __metrics_path__ for Prometheus is /metrics so we need to
         # manually add it here in the case it's not set for our test
-        if not data.setdefault("path", "/metrics"):
-            data["path"] = "/metrics"
+        path = urllib.parse.urlsplit(request.POST.get("path") or "/metrics")
+        if path.scheme or path.netloc or not path.path.startswith("/"):
+            return JsonResponse({"error": "Invalid path"})
+
+        def target(host):
+            netloc = f"[{host.name}]" if ":" in host.name else host.name
+            return urllib.parse.urlunsplit((scheme, f"{netloc}:{port}", path.path, path.query, ""))
 
         def query():
-            futures = []
+            futures = {}
             with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
                 for host in farm.host_set.all():
-                    futures.append(
-                        executor.submit(
-                            util.scrape,
-                            "{scheme}://{host}:{port}{path}".format(host=host.name, **data),
-                        )
-                    )
+                    url = target(host)
+                    futures[executor.submit(util.egress_scrape, url)] = url
                 try:
                     for future in concurrent.futures.as_completed(
                         futures, timeout=settings.PROMGEN_EXPORTER_SCRAPE_TIMEOUT
                     ):
+                        url = futures[future]
                         try:
                             result = future.result()
                             result.raise_for_status()
                             metrics = list(text_string_to_metric_families(result.text))
                             yield (
-                                result.url,
+                                url,
                                 {
                                     "status_code": result.status_code,
                                     "metric_count": len(list(metrics)),
                                 },
                             )
+                        except util.EgressError as e:
+                            yield url, str(e)
                         except ValueError as e:
-                            yield result.url, f"Unable to parse metrics: {e}"
-                        except requests.ConnectionError as e:
+                            yield url, f"Unable to parse metrics: {e}"
+                        except requests.ConnectionError:
                             logger.warning("Error connecting to server")
-                            yield e.request.url, "Error connecting to server"
+                            yield url, "Error connecting to server"
                         except requests.RequestException as e:
                             logger.warning("Error with response")
-                            yield e.request.url, str(e)
+                            yield url, str(e)
                         except Exception:
                             logger.exception("Unknown Exception")
-                            yield "Unknown URL", "Unknown error"
+                            yield url, "Unknown error"
                 except concurrent.futures.TimeoutError:
                     for future in futures:
                         future.cancel()

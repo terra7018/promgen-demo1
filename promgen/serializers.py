@@ -13,7 +13,7 @@ from guardian.models import UserObjectPermission
 from rest_framework import serializers
 
 import promgen.templatetags.promgen as macro
-from promgen import errors, models, settings, shortcuts, validators
+from promgen import errors, models, notification, settings, shortcuts, validators
 from promgen.shortcuts import resolve_domain
 
 
@@ -551,6 +551,16 @@ class RegisterNotifierSerializer(serializers.Serializer):
     alias = serializers.CharField(required=False)
     enabled = serializers.BooleanField(required=False, default=True)
     filters = FilterSerializer(many=True, required=False)
+
+    def validate(self, attrs):
+        # Run the driver specific form so that REST registrations are subject to
+        # the same value validation as the web UI
+        form = notification.load(attrs["sender"]).form(
+            data={"value": attrs["value"], "alias": attrs.get("alias", "")}
+        )
+        if not form.is_valid():
+            raise serializers.ValidationError(form.errors)
+        return attrs
 
 
 class ServiceRetrieveDetailSerializer(ModelWithCustomLabelSerializer):

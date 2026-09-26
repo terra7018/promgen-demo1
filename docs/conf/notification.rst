@@ -45,3 +45,23 @@ proxy, you can basically ignore this setting or set it to an empty string.
 
     promgen.notification.slack:
       proxy: http://slack-proxy.example.com:8080
+
+Outbound Request Policy
+---------------------
+
+User supplied destinations (webhook, Slack and Alertmanager notifier URLs, and the
+exporter scrape test) are validated before Promgen sends a request to them. Only
+``http`` and ``https`` URLs without embedded credentials are allowed, redirects are not
+followed, and the destination host must not resolve to a loopback, link-local or
+private (RFC1918) address. Deployments that need to notify or scrape hosts on a private
+network can relax this with the ``egress`` section:
+
+.. code-block:: yaml
+
+    egress:
+      # Allow destinations that resolve to RFC1918 / private addresses.
+      # Loopback and link-local (e.g. cloud metadata) addresses are always blocked.
+      allow_private: true
+      # Hostnames that are always allowed regardless of the address they resolve to.
+      allowed_hosts:
+        - alertmanager.internal

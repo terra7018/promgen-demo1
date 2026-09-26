@@ -4,7 +4,7 @@ import logging
 
 from django import forms
 
-from promgen import util
+from promgen import util, validators
 from promgen.notification import NotificationBase
 
 logger = logging.getLogger(__name__)
@@ -14,6 +14,7 @@ class FormSlack(forms.Form):
     value = forms.URLField(
         required=True,
         label="Slack Incoming Webhook URL",
+        validators=[validators.egress_url],
     )
     alias = forms.CharField(
         required=False,
@@ -55,4 +56,4 @@ class NotificationSlack(NotificationBase):
             "text": message,
         }
 
-        util.post(url, json=json, **kwargs).raise_for_status()
+        util.egress_post(url, json=json, **kwargs).raise_for_status()

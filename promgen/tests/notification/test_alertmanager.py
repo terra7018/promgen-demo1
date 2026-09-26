@@ -43,8 +43,10 @@ class AlertmanagerTest(tests.PromgenTest):
 
         mock_post.assert_has_calls(
             [
-                mock.call("http://alertmanager/api/v2/alerts", json=_SAMPLE),
-                mock.call("http://alertmanager_2/api/v2/alerts", json=_SAMPLE),
+                mock.call("http://alertmanager/api/v2/alerts", json=_SAMPLE, allow_redirects=False),
+                mock.call(
+                    "http://alertmanager_2/api/v2/alerts", json=_SAMPLE, allow_redirects=False
+                ),
             ],
             any_order=True,
         )

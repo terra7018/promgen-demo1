@@ -52,11 +52,13 @@ class SlackTest(tests.PromgenTest):
                     self.TestHook1,
                     json={"text": _MESSAGE},
                     allow_redirects=False,
+                    session=mock.ANY,
                 ),
                 mock.call(
                     self.TestHook2,
                     json={"text": _RESOLVED},
                     allow_redirects=False,
+                    session=mock.ANY,
                 ),
             ],
             any_order=True,

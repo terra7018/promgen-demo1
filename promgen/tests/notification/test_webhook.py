@@ -51,10 +51,16 @@ class WebhookTest(tests.PromgenTest):
         mock_post.assert_has_calls(
             [
                 mock.call(
-                    "http://webhook.example.com/project", json=_SAMPLE, allow_redirects=False
+                    "http://webhook.example.com/project",
+                    json=_SAMPLE,
+                    allow_redirects=False,
+                    session=mock.ANY,
                 ),
                 mock.call(
-                    "http://webhook.example.com/service", json=_SAMPLE, allow_redirects=False
+                    "http://webhook.example.com/service",
+                    json=_SAMPLE,
+                    allow_redirects=False,
+                    session=mock.ANY,
                 ),
             ],
             any_order=True,

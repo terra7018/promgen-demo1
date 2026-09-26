@@ -555,11 +555,11 @@ class RegisterNotifierSerializer(serializers.Serializer):
     def validate(self, attrs):
         # Run the driver specific form so that REST registrations are subject to
         # the same value validation as the web UI
-        form = notification.load(attrs["sender"]).form(
-            data={"value": attrs["value"], "alias": attrs.get("alias", "")}
-        )
-        if not form.is_valid():
-            raise serializers.ValidationError(form.errors)
+        form_class = notification.load(attrs["sender"]).form
+        if "value" in form_class.base_fields:
+            form = form_class(data={"value": attrs["value"], "alias": attrs.get("alias", "")})
+            if not form.is_valid():
+                raise serializers.ValidationError(form.errors)
         return attrs
 
 

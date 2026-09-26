@@ -60,13 +60,8 @@ class EgressTest(SimpleTestCase):
     @mock.patch("promgen.util.resolve_hostname")
     def test_allows_public(self, mock_resolve):
         mock_resolve.return_value = self.PUBLIC
-        self.assertEqual(
-            util.validate_egress_url("https://hooks.example.com/x"), "https://hooks.example.com/x"
-        )
-        self.assertEqual(
-            util.validate_egress_url("http://93.184.216.34:8080/metrics"),
-            "http://93.184.216.34:8080/metrics",
-        )
+        self.assertEqual(util.validate_egress_url("https://hooks.example.com/x"), self.PUBLIC)
+        self.assertEqual(util.validate_egress_url("http://93.184.216.34:8080/metrics"), self.PUBLIC)
 
     @override_settings(PROMGEN={"egress": {"allow_private": True}})
     def test_allow_private_setting(self):
@@ -88,9 +83,45 @@ class EgressTest(SimpleTestCase):
         mock_resolve.return_value = self.PUBLIC
         util.egress_post("http://hooks.example.com/", json={})
         mock_post.assert_called_once_with(
-            "http://hooks.example.com/", json={}, allow_redirects=False
+            "http://hooks.example.com/", json={}, allow_redirects=False, session=mock.ANY
         )
+        session = mock_post.call_args[1]["session"]
+        self.assertIsInstance(session.get_adapter("http://x"), util.PinnedAdapter)
 
         with self.assertRaises(util.EgressError):
             util.egress_post("http://127.0.0.1/", json={})
         mock_post.assert_called_once()
+
+    @staticmethod
+    def _response(*args, **kwargs):
+        response = Response()
+        response.status_code = 200
+        response._content = b""
+        return response
+
+    @mock.patch("promgen.util.resolve_hostname")
+    @mock.patch("requests.adapters.HTTPAdapter.send")
+    def test_pinned_to_validated_address(self, mock_send, mock_resolve):
+        # The connection must go to the address that passed validation even if
+        # the hostname would resolve to something else by the time we connect
+        mock_resolve.return_value = self.PUBLIC
+        mock_send.side_effect = self._response
+        util.egress_post("https://hooks.example.com:8443/x", json={})
+        request = mock_send.call_args[0][0]
+        self.assertEqual(request.url, "https://93.184.216.34:8443/x")
+        self.assertEqual(request.headers["Host"], "hooks.example.com:8443")
+
+        adapter = util.PinnedAdapter("hooks.example.com", self.PUBLIC[0])
+        _, pool_kwargs = adapter.build_connection_pool_key_attributes(request, verify=True)
+        self.assertEqual(pool_kwargs["server_hostname"], "hooks.example.com")
+        self.assertEqual(pool_kwargs["assert_hostname"], "hooks.example.com")
+
+    @mock.patch("promgen.util.resolve_hostname")
+    @mock.patch("requests.adapters.HTTPAdapter.send")
+    def test_egress_scrape(self, mock_send, mock_resolve):
+        mock_resolve.return_value = self.PUBLIC
+        mock_send.side_effect = self._response
+        util.egress_scrape("http://node.example.com:9100/metrics")
+        request = mock_send.call_args[0][0]
+        self.assertEqual(request.url, "http://93.184.216.34:9100/metrics")
+        self.assertEqual(request.headers["Host"], "node.example.com:9100")

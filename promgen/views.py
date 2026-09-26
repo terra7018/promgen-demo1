@@ -943,42 +943,40 @@ class ExporterScrape(LoginRequiredMixin, View):
             return urllib.parse.urlunsplit((scheme, f"{netloc}:{port}", path.path, path.query, ""))
 
         def query():
-            futures = []
+            futures = {}
             with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
                 for host in farm.host_set.all():
                     url = target(host)
-                    try:
-                        util.validate_egress_url(url)
-                    except util.EgressError as e:
-                        yield url, str(e)
-                        continue
-                    futures.append(executor.submit(util.scrape, url, allow_redirects=False))
+                    futures[executor.submit(util.egress_scrape, url)] = url
                 try:
                     for future in concurrent.futures.as_completed(
                         futures, timeout=settings.PROMGEN_EXPORTER_SCRAPE_TIMEOUT
                     ):
+                        url = futures[future]
                         try:
                             result = future.result()
                             result.raise_for_status()
                             metrics = list(text_string_to_metric_families(result.text))
                             yield (
-                                result.url,
+                                url,
                                 {
                                     "status_code": result.status_code,
                                     "metric_count": len(list(metrics)),
                                 },
                             )
+                        except util.EgressError as e:
+                            yield url, str(e)
                         except ValueError as e:
-                            yield result.url, f"Unable to parse metrics: {e}"
-                        except requests.ConnectionError as e:
+                            yield url, f"Unable to parse metrics: {e}"
+                        except requests.ConnectionError:
                             logger.warning("Error connecting to server")
-                            yield e.request.url, "Error connecting to server"
+                            yield url, "Error connecting to server"
                         except requests.RequestException as e:
                             logger.warning("Error with response")
-                            yield e.request.url, str(e)
+                            yield url, str(e)
                         except Exception:
                             logger.exception("Unknown Exception")
-                            yield "Unknown URL", "Unknown error"
+                            yield url, "Unknown error"
                 except concurrent.futures.TimeoutError:
                     for future in futures:
                         future.cancel()

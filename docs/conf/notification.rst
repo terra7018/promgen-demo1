@@ -53,8 +53,10 @@ User supplied destinations (webhook, Slack and Alertmanager notifier URLs, and t
 exporter scrape test) are validated before Promgen sends a request to them. Only
 ``http`` and ``https`` URLs without embedded credentials are allowed, redirects are not
 followed, and the destination host must not resolve to a loopback, link-local or
-private (RFC1918) address. Deployments that need to notify or scrape hosts on a private
-network can relax this with the ``egress`` section:
+private (RFC1918) address. The request is sent to the address that passed validation
+(the hostname is not resolved a second time) so that DNS rebinding cannot redirect it.
+Deployments that need to notify or scrape hosts on a private network can relax this with
+the ``egress`` section:
 
 .. code-block:: yaml
 

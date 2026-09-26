@@ -58,7 +58,7 @@ class RouteTests(tests.PromgenTest):
         )
         self.assertCount(models.Host, 6, "Original 4 hosts and two new ones")
 
-    @mock.patch("requests.get")
+    @mock.patch("requests.Session.get")
     def test_scrape(self, mock_get):
         shard = models.Shard.objects.create(name="test_scrape_shard")
         service = models.Service.objects.create(name="test_scrape_service", owner=self.user)

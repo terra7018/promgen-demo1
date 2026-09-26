@@ -16,9 +16,7 @@ class HostTests(PromgenTest):
     # separated and comma separated work, but are not necessarily testing
     # valid/invalid hostnames
     def test_newline(self):
-        assign_perm(
-            "promgen.project_editor", self.user, get_object_or_404(models.Project, pk=1)
-        )
+        assign_perm("promgen.project_editor", self.user, get_object_or_404(models.Project, pk=1))
         self.client.post(
             reverse("hosts-add", args=[1]),
             {"hosts": "\naaa.example.com\nbbb.example.com\nccc.example.com \n"},
@@ -27,9 +25,7 @@ class HostTests(PromgenTest):
         self.assertCount(models.Host, 4, "Expected 4 hosts (Fixture has one host)")
 
     def test_comma(self):
-        assign_perm(
-            "promgen.project_editor", self.user, get_object_or_404(models.Project, pk=1)
-        )
+        assign_perm("promgen.project_editor", self.user, get_object_or_404(models.Project, pk=1))
         self.client.post(
             reverse("hosts-add", args=[1]),
             {"hosts": ",,aaa.example.com, bbb.example.com,ccc.example.com,"},

@@ -32,6 +32,13 @@ class LegacyApiAuthTest(tests.PromgenTest):
                 self.assertEqual(self.client.get(url).status_code, 200)
 
     @override_settings(PROMGEN=tests.SETTINGS)
+    def test_accept_header_ignored(self):
+        self.force_login(username="demo")
+        response = self.client.get("/api/v1/rules", HTTP_ACCEPT="application/x-yaml")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "application/x-yaml")
+
+    @override_settings(PROMGEN=tests.SETTINGS)
     @mock.patch("promgen.tasks.write_urls")
     def test_non_superuser_post_denied(self, mock_write):
         self.force_login(username="demo")

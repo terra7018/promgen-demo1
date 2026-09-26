@@ -49,7 +49,8 @@ to be able to access Promgen over HTTP.
     set -e
     # Download all the targets from Promgen to a temporary file
     # The API requires authentication; generate a token from your Promgen profile page
-    curl -H "Authorization: Token $PROMGEN_TOKEN" http://promgen/api/v1/targets --output /etc/prometheus/targets.tmp
+    # and always send it over HTTPS
+    curl -H "Authorization: Token $PROMGEN_TOKEN" https://promgen/api/v1/targets --output /etc/prometheus/targets.tmp
     # Optionally you could download from a specific service or project
     # curl http://promgen/service/123/targets -o /etc/prometheus/targets.tmp
     # curl http://promgen/project/456/targets -o /etc/prometheus/targets.tmp

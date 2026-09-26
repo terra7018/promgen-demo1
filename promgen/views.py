@@ -35,6 +35,7 @@ from guardian.models import GroupObjectPermission
 from guardian.shortcuts import assign_perm, get_perms, remove_perm
 from prometheus_client.core import CounterMetricFamily, GaugeMetricFamily
 from prometheus_client.parser import text_string_to_metric_families
+from rest_framework.negotiation import DefaultContentNegotiation
 from rest_framework.views import APIView
 
 import promgen.templatetags.promgen as macro
@@ -1416,7 +1417,18 @@ class HostRegister(PromgenGuardianPermissionMixin, FormView):
         return get_object_or_404(models.Farm, id=self.kwargs["pk"])
 
 
-class ApiConfig(APIView):
+class _IgnoreAcceptNegotiation(DefaultContentNegotiation):
+    # These views build their own HttpResponse, so the Accept header must not
+    # cause DRF to reject the request with 406
+    def select_renderer(self, request, renderers, format_suffix=None):
+        return renderers[0], renderers[0].media_type
+
+
+class _LegacyApiView(APIView):
+    content_negotiation_class = _IgnoreAcceptNegotiation
+
+
+class ApiConfig(_LegacyApiView):
     def get(self, request):
         return HttpResponse(prometheus.render_config(), content_type="application/json")
 
@@ -1439,7 +1451,7 @@ class ApiQueue(View):
         return HttpResponse("OK", status=202)
 
 
-class _ExportRules(APIView):
+class _ExportRules(_LegacyApiView):
     def format(self, rules=None, name="promgen"):
         content = prometheus.render_rules(rules)
         response = HttpResponse(content)
@@ -1462,7 +1474,7 @@ class RuleExport(_ExportRules):
         return self.format(rules)
 
 
-class URLConfig(APIView):
+class URLConfig(_LegacyApiView):
     def get(self, request):
         return HttpResponse(prometheus.render_urls(), content_type="application/json")
 

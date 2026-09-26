@@ -267,7 +267,29 @@ def get_affected_obj_by_matchers(matchers):
     return affected_projects, affected_services
 
 
-class ProxySilences(View):
+class JsonLoginRequiredMixin:
+    """
+    Reject unauthenticated requests with a JSON 401 instead of redirecting to the login
+    page, so that the frontend's fetch() calls can surface the error.
+    """
+
+    def dispatch(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return JsonResponse(
+                {
+                    "messages": [
+                        {
+                            "class": "alert alert-danger",
+                            "message": _("You must be logged in to perform this action."),
+                        }
+                    ]
+                },
+                status=HTTPStatus.UNAUTHORIZED,
+            )
+        return super().dispatch(request, *args, **kwargs)
+
+
+class ProxySilences(JsonLoginRequiredMixin, View):
     def get(self, request):
         try:
             url = urljoin(util.setting("alertmanager:url"), "/api/v2/silences")
@@ -409,8 +431,55 @@ def get_uneditable_obj_by_silence_matchers(matchers, user):
     return uneditable_projects, uneditable_services
 
 
+def get_silence_permission_errors(matchers, user, unmatched_msg, few_msg, many_msg):
+    """
+    Return a list of error messages describing why ``user`` may not act on a silence with
+    the given matchers. An empty list means the user is allowed.
+
+    Non-superusers must have edit rights on every project/service matched by the silence.
+    A silence whose matchers do not resolve to any project or service known to Promgen is
+    rejected, since there is nothing to check the user's permissions against.
+
+    ``few_msg`` is formatted with ``label`` and ``names``; ``many_msg`` with ``count`` and
+    ``label``.
+    """
+    if user.is_superuser:
+        return []
+
+    affected_projects, affected_services = get_affected_obj_by_matchers(matchers)
+    if not affected_projects.exists() and not affected_services.exists():
+        return [{"class": "alert alert-warning", "message": unmatched_msg}]
+
+    uneditable_projects, uneditable_services = get_uneditable_obj_by_silence_matchers(
+        matchers, user
+    )
+    messages = []
+    for objs, label in [
+        (uneditable_projects, "projects"),
+        (uneditable_services, "services"),
+    ]:
+        if objs.exists():
+            count = objs.count()
+            if count <= 20:
+                names = ", ".join(objs.values_list("name", flat=True))
+                messages.append(
+                    {
+                        "class": "alert alert-warning",
+                        "message": few_msg.format(label=label, names=names),
+                    }
+                )
+            else:
+                messages.append(
+                    {
+                        "class": "alert alert-warning",
+                        "message": many_msg.format(count=count, label=label),
+                    }
+                )
+    return messages
+
+
 class ProxySilencesV2(APIView):
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
         serializer = serializers.SilenceSerializer(
@@ -428,44 +497,20 @@ class ProxySilencesV2(APIView):
                 status=HTTPStatus.UNPROCESSABLE_ENTITY,
             )
 
-        # Check if the user has permission to silence the alert
-        if not request.user.is_superuser:
-            uneditable_projects, uneditable_services = get_uneditable_obj_by_silence_matchers(
-                serializer.data["matchers"], request.user
-            )
-            messages = []
-            for objs, label in [
-                (uneditable_projects, "projects"),
-                (uneditable_services, "services"),
-            ]:
-                if objs.exists():
-                    count = objs.count()
-                    if count <= 20:
-                        names = ", ".join(objs.values_list("name", flat=True))
-                        messages.append(
-                            {
-                                "class": "alert alert-warning",
-                                "message": _(
-                                    "You do not have permission to silence alerts for "
-                                    "the following {label}: {names}."
-                                ).format(label=label, names=names),
-                            }
-                        )
-                    else:
-                        messages.append(
-                            {
-                                "class": "alert alert-warning",
-                                "message": _(
-                                    "You do not have permission to silence alerts for "
-                                    "many ({count}) {label}."
-                                ).format(count=count, label=label),
-                            }
-                        )
-            if messages:
-                return JsonResponse(
-                    {"messages": messages},
-                    status=HTTPStatus.FORBIDDEN,
-                )
+        messages = get_silence_permission_errors(
+            serializer.data["matchers"],
+            request.user,
+            unmatched_msg=_(
+                "You do not have permission to silence alerts that do not match "
+                "any project or service registered in Promgen."
+            ),
+            few_msg=_(
+                "You do not have permission to silence alerts for the following {label}: {names}."
+            ),
+            many_msg=_("You do not have permission to silence alerts for many ({count}) {label}."),
+        )
+        if messages:
+            return JsonResponse({"messages": messages}, status=HTTPStatus.FORBIDDEN)
 
         try:
             response = prometheus.silence(labels=None, **serializer.data)
@@ -489,7 +534,7 @@ class ProxySilencesV2(APIView):
         )
 
 
-class ProxyDeleteSilence(View):
+class ProxyDeleteSilence(JsonLoginRequiredMixin, View):
     def delete(self, request, silence_id):
         url = urljoin(util.setting("alertmanager:url"), f"/api/v2/silence/{silence_id}")
         # First, check if the silence exists
@@ -499,45 +544,24 @@ class ProxyDeleteSilence(View):
                 response.text, status=response.status_code, content_type="application/json"
             )
 
-        # Check if the user has permission to delete the silence
-        if not request.user.is_superuser:
-            silence = response.json()
-            uneditable_projects, uneditable_services = get_uneditable_obj_by_silence_matchers(
-                silence.get("matchers", []), request.user
-            )
-            messages = []
-            for objs, label in [
-                (uneditable_projects, "projects"),
-                (uneditable_services, "services"),
-            ]:
-                if objs.exists():
-                    count = objs.count()
-                    if count <= 20:
-                        names = ", ".join(objs.values_list("name", flat=True))
-                        messages.append(
-                            {
-                                "class": "alert alert-warning",
-                                "message": _(
-                                    "You do not have permission to expire the silence that matches "
-                                    "the following {label}: {names}."
-                                ).format(label=label, names=names),
-                            }
-                        )
-                    else:
-                        messages.append(
-                            {
-                                "class": "alert alert-warning",
-                                "message": _(
-                                    "You do not have permission to expire the silence that matches "
-                                    "many ({count}) {label}."
-                                ).format(count=count, label=label),
-                            }
-                        )
-            if messages:
-                return JsonResponse(
-                    {"messages": messages},
-                    status=HTTPStatus.FORBIDDEN,
-                )
+        messages = get_silence_permission_errors(
+            response.json().get("matchers", []),
+            request.user,
+            unmatched_msg=_(
+                "You do not have permission to expire a silence that does not match "
+                "any project or service registered in Promgen."
+            ),
+            few_msg=_(
+                "You do not have permission to expire the silence that matches "
+                "the following {label}: {names}."
+            ),
+            many_msg=_(
+                "You do not have permission to expire the silence that matches "
+                "many ({count}) {label}."
+            ),
+        )
+        if messages:
+            return JsonResponse({"messages": messages}, status=HTTPStatus.FORBIDDEN)
 
         # Delete the silence
         response = util.delete(url)

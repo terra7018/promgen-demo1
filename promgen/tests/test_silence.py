@@ -63,6 +63,155 @@ class SilenceTest(tests.PromgenTest):
         mock_post.assert_called_with("http://alertmanager:9093/api/v2/silences", json=TEST_RANGE)
 
     @override_settings(PROMGEN=TEST_SETTINGS)
+    @mock.patch("promgen.util.post")
+    def test_v2_requires_authentication(self, mock_post):
+        self.client.logout()
+        response = self.client.post(
+            reverse("proxy-silence-v2"),
+            data={
+                "duration": "1m",
+                "matchers": [
+                    {"name": "project", "value": "unknown", "isRegex": False, "isEqual": True}
+                ],
+            },
+            content_type="application/json",
+        )
+        self.assertIn(response.status_code, [401, 403])
+        mock_post.assert_not_called()
+
+    @override_settings(PROMGEN=TEST_SETTINGS)
+    @mock.patch("promgen.util.post")
+    def test_v2_denies_user_without_project_permission(self, mock_post):
+        self.force_login(username="demo")
+        response = self.client.post(
+            reverse("proxy-silence-v2"),
+            data={
+                "duration": "1m",
+                "matchers": [
+                    {"name": "project", "value": "test-project", "isRegex": False, "isEqual": True}
+                ],
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 403)
+        mock_post.assert_not_called()
+
+    @override_settings(PROMGEN=TEST_SETTINGS)
+    @mock.patch("promgen.util.post")
+    def test_v1_requires_authentication(self, mock_post):
+        self.client.logout()
+        response = self.client.post(
+            reverse("proxy-silence"),
+            data={"duration": "1m", "labels": {"project": "unknown"}},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response["Content-Type"], "application/json")
+        self.assertIn("messages", response.json())
+        mock_post.assert_not_called()
+
+    @override_settings(PROMGEN=TEST_SETTINGS)
+    @mock.patch("promgen.util.post")
+    def test_v1_enforces_csrf_for_session_clients(self, mock_post):
+        self.client = self.client_class(enforce_csrf_checks=True)
+        self.force_login(username="admin")
+        response = self.client.post(
+            reverse("proxy-silence"),
+            data={"duration": "1m", "labels": {"instance": "example.com"}},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 403)
+        mock_post.assert_not_called()
+
+    @override_settings(PROMGEN=TEST_SETTINGS)
+    @mock.patch("promgen.util.delete")
+    @mock.patch("promgen.util.get")
+    def test_delete_enforces_csrf_for_session_clients(self, mock_get, mock_delete):
+        self.client = self.client_class(enforce_csrf_checks=True)
+        self.force_login(username="admin")
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = {"matchers": []}
+        response = self.client.delete(reverse("proxy-silence-delete", args=["abc"]))
+        self.assertEqual(response.status_code, 403)
+        mock_delete.assert_not_called()
+
+    @override_settings(PROMGEN=TEST_SETTINGS)
+    @mock.patch("promgen.util.delete")
+    @mock.patch("promgen.util.get")
+    def test_delete_requires_authentication(self, mock_get, mock_delete):
+        self.client.logout()
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = {
+            "matchers": [{"name": "project", "value": "unknown", "isRegex": False, "isEqual": True}]
+        }
+        response = self.client.delete(reverse("proxy-silence-delete", args=["abc"]))
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response["Content-Type"], "application/json")
+        self.assertIn("messages", response.json())
+        mock_delete.assert_not_called()
+
+    @override_settings(PROMGEN=TEST_SETTINGS)
+    @mock.patch("promgen.util.delete")
+    @mock.patch("promgen.util.get")
+    def test_delete_denies_unmatched_silence_for_non_superuser(self, mock_get, mock_delete):
+        self.force_login(username="demo")
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = {
+            "matchers": [{"name": "project", "value": "unknown", "isRegex": False, "isEqual": True}]
+        }
+        response = self.client.delete(reverse("proxy-silence-delete", args=["abc"]))
+        self.assertEqual(response.status_code, 403)
+        mock_delete.assert_not_called()
+
+    @override_settings(PROMGEN=TEST_SETTINGS)
+    @mock.patch("promgen.util.delete")
+    @mock.patch("promgen.util.get")
+    def test_delete_denies_silence_without_project_or_service_for_non_superuser(
+        self, mock_get, mock_delete
+    ):
+        self.force_login(username="demo")
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = {
+            "matchers": [
+                {"name": "instance", "value": "example.com", "isRegex": False, "isEqual": True}
+            ]
+        }
+        response = self.client.delete(reverse("proxy-silence-delete", args=["abc"]))
+        self.assertEqual(response.status_code, 403)
+        mock_delete.assert_not_called()
+
+    @override_settings(PROMGEN=TEST_SETTINGS)
+    @mock.patch("promgen.util.delete")
+    @mock.patch("promgen.util.get")
+    def test_delete_allows_superuser_for_unmatched_silence(self, mock_get, mock_delete):
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = {
+            "matchers": [{"name": "project", "value": "unknown", "isRegex": False, "isEqual": True}]
+        }
+        mock_delete.return_value.status_code = 200
+        mock_delete.return_value.text = "{}"
+        response = self.client.delete(reverse("proxy-silence-delete", args=["abc"]))
+        self.assertEqual(response.status_code, 200)
+        mock_delete.assert_called_once()
+
+    @override_settings(PROMGEN=TEST_SETTINGS)
+    @mock.patch("promgen.util.post")
+    def test_v2_denies_unmatched_silence_for_non_superuser(self, mock_post):
+        self.force_login(username="demo")
+        response = self.client.post(
+            reverse("proxy-silence-v2"),
+            data={
+                "duration": "1m",
+                "matchers": [
+                    {"name": "project", "value": "unknown", "isRegex": False, "isEqual": True}
+                ],
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 403)
+        mock_post.assert_not_called()
+
+    @override_settings(PROMGEN=TEST_SETTINGS)
     def test_site_silence_errors(self):
         form = forms.SilenceForm(
             data={"labels": {}, "duration": "1m", "createdBy": self.user.username}

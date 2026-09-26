@@ -322,6 +322,7 @@ class RestAPITest(tests.PromgenTest):
 
         project.service.owner = user
         project.service.save()
+        assign_perm("service_admin", user, project.service)
         response = self.client.patch(
             reverse("api-v2:project-detail", kwargs={"id": 1}),
             data={"owner": 2},
@@ -334,8 +335,10 @@ class RestAPITest(tests.PromgenTest):
 
         project.service.owner = admin
         project.service.save()
+        remove_perm("service_admin", user, project.service)
         project.owner = admin
         project.save()
+        assign_perm("project_admin", user, project)
         response = self.client.patch(
             reverse("api-v2:project-detail", kwargs={"id": 1}),
             data={"owner": 2},
@@ -579,6 +582,7 @@ class RestAPITest(tests.PromgenTest):
         )
         self.assertEqual(response.status_code, 200, "Current owner can change service owner.")
 
+        assign_perm("service_admin", user, service)
         response = self.client.patch(
             reverse("api-v2:service-detail", kwargs={"id": 1}),
             data={"owner": 2},

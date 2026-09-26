@@ -412,6 +412,11 @@ class WebTests(PromgenTest):
             reverse("service-delete", kwargs={"pk": new_service.pk}),
         )
         self.assertEqual(response.status_code, 302)
+        self.assertTrue(models.Service.objects.filter(pk=new_service.pk).exists())
+
+        self.force_login(username="admin")
+        response = self.client.delete(reverse("service-delete", kwargs={"pk": new_service.pk}))
+        self.assertEqual(response.status_code, 302)
         self.assertFalse(
             models.CustomLabelInstance.objects.filter(
                 value="updated_label_value", content_type__model="service", object_id=new_service.pk

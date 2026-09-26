@@ -35,6 +35,7 @@ from guardian.models import GroupObjectPermission
 from guardian.shortcuts import assign_perm, get_perms, remove_perm
 from prometheus_client.core import CounterMetricFamily, GaugeMetricFamily
 from prometheus_client.parser import text_string_to_metric_families
+from rest_framework.views import APIView
 
 import promgen.templatetags.promgen as macro
 from promgen import (
@@ -1415,7 +1416,7 @@ class HostRegister(PromgenGuardianPermissionMixin, FormView):
         return get_object_or_404(models.Farm, id=self.kwargs["pk"])
 
 
-class ApiConfig(View):
+class ApiConfig(APIView):
     def get(self, request):
         return HttpResponse(prometheus.render_config(), content_type="application/json")
 
@@ -1438,7 +1439,7 @@ class ApiQueue(View):
         return HttpResponse("OK", status=202)
 
 
-class _ExportRules(View):
+class _ExportRules(APIView):
     def format(self, rules=None, name="promgen"):
         content = prometheus.render_rules(rules)
         response = HttpResponse(content)
@@ -1461,7 +1462,7 @@ class RuleExport(_ExportRules):
         return self.format(rules)
 
 
-class URLConfig(View):
+class URLConfig(APIView):
     def get(self, request):
         return HttpResponse(prometheus.render_urls(), content_type="application/json")
 

@@ -7,6 +7,7 @@ from http import HTTPStatus
 from django.contrib.auth.models import User
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from django.db.models import Q
 from django.urls import re_path
 from drf_spectacular.utils import (
@@ -1115,11 +1116,12 @@ class ProjectViewSet(
             return serializers.ProjectRetrieveDetailSerializer
         return serializers.ProjectSimpleSerializer
 
+    @transaction.atomic
     def perform_update(self, serializer):
         project = self.get_object()
-        original_owner_id = project.owner_id
+        original_owner = project.owner
         new_owner = serializer.validated_data.get("owner")
-        owner_changed = new_owner is not None and new_owner.id != original_owner_id
+        owner_changed = new_owner is not None and new_owner.id != original_owner.id
         original_service_id = project.service_id
         new_service = serializer.validated_data.get("service")
         service_changed = new_service is not None and new_service.id != original_service_id
@@ -1139,10 +1141,15 @@ class ProjectViewSet(
                     )
                 raise ValidationError(validation_errors)
 
+        if owner_changed:
+            assign_perm("project_admin", new_owner, project)
+
         super().perform_update(serializer)
 
         if owner_changed:
-            assign_perm("project_admin", new_owner, project)
+            if original_owner != self.request.user:
+                remove_perm("project_admin", original_owner, project)
+            signals.add_default_owner_subscription(project, new_owner)
 
     def destroy(self, request, *args, **kwargs):
         project = self.get_object()
@@ -1352,14 +1359,15 @@ class ServiceViewSet(
     def perform_create(self, serializer):
         serializer.save(owner=self.request.user)
 
+    @transaction.atomic
     def perform_update(self, serializer):
         service = self.get_object()
-        original_owner_id = service.owner_id
+        original_owner = service.owner
         new_owner = serializer.validated_data.get("owner")
-        owner_changed = new_owner is not None and new_owner.id != original_owner_id
+        owner_changed = new_owner is not None and new_owner.id != original_owner.id
 
         if owner_changed and not (
-            self.request.user.is_superuser or self.request.user.id == original_owner_id
+            self.request.user.is_superuser or self.request.user.id == original_owner.id
         ):
             raise ValidationError({"owner": "You do not have permission to change the owner."})
 
@@ -1367,6 +1375,9 @@ class ServiceViewSet(
 
         if owner_changed:
             assign_perm("service_admin", new_owner, service)
+            if original_owner != self.request.user:
+                remove_perm("service_admin", original_owner, service)
+            signals.add_default_owner_subscription(service, new_owner)
 
     def destroy(self, request, *args, **kwargs):
         service = self.get_object()

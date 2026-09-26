@@ -1066,6 +1066,7 @@ class ProjectUpdate(PromgenGuardianPermissionMixin, UpdateView):
         context["shard_list"] = models.Shard.objects.all()
         return context
 
+    @transaction.atomic
     def form_valid(self, form):
         initial = self.get_object()
         if "owner" in form.changed_data or "service" in form.changed_data:
@@ -1081,8 +1082,14 @@ class ProjectUpdate(PromgenGuardianPermissionMixin, UpdateView):
                         "service", _("You do not have permission to change the service.")
                     )
                 return self.form_invalid(form)
+        if "owner" in form.changed_data or "service" in form.changed_data:
             assign_perm("project_admin", form.cleaned_data["owner"], form.instance)
-        return super().form_valid(form)
+        response = super().form_valid(form)
+        if "owner" in form.changed_data:
+            if initial.owner != self.request.user:
+                remove_perm("project_admin", initial.owner, form.instance)
+            signals.add_default_owner_subscription(form.instance, form.cleaned_data["owner"])
+        return response
 
 
 class ServiceUpdate(PromgenGuardianPermissionMixin, UpdateView):
@@ -1091,15 +1098,20 @@ class ServiceUpdate(PromgenGuardianPermissionMixin, UpdateView):
     form_class = forms.ServiceUpdate
     model = models.Service
 
+    @transaction.atomic
     def form_valid(self, form):
         if "owner" in form.changed_data:
-            if not (
-                self.request.user.is_superuser or self.request.user.id == form.initial["owner"]
-            ):
+            original_owner = self.get_object().owner
+            if not (self.request.user.is_superuser or self.request.user == original_owner):
                 form.add_error("owner", _("You do not have permission to change the owner."))
                 return self.form_invalid(form)
+        response = super().form_valid(form)
+        if "owner" in form.changed_data:
             assign_perm("service_admin", form.cleaned_data["owner"], form.instance)
-        return super().form_valid(form)
+            if original_owner != self.request.user:
+                remove_perm("service_admin", original_owner, form.instance)
+            signals.add_default_owner_subscription(form.instance, form.cleaned_data["owner"])
+        return response
 
 
 class RuleDetail(PromgenGuardianPermissionMixin, DetailView):

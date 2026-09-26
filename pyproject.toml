@@ -34,7 +34,7 @@ dependencies = [
     "prometheus-client",
     "python-dateutil",
     "pyyaml",
-    "requests>=2.32",
+    "requests>=2.32.3",
     "social-auth-app-django>=2.0.0",
 ]
 

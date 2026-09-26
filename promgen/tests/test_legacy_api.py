@@ -28,15 +28,29 @@ class LegacyApiAuthTest(tests.PromgenTest):
                 self.assertEqual(response.status_code, 401)
 
     @override_settings(PROMGEN=tests.SETTINGS)
-    def test_authenticated_get_allowed(self):
+    def test_non_superuser_get_denied(self):
         self.force_login(username="demo")
+        for url in URLS:
+            with self.subTest(url=url):
+                self.assertEqual(self.client.get(url).status_code, 403)
+
+    @override_settings(PROMGEN=tests.SETTINGS)
+    def test_superuser_get_allowed(self):
+        self.force_login(username="admin")
         for url in URLS:
             with self.subTest(url=url):
                 self.assertEqual(self.client.get(url).status_code, 200)
 
     @override_settings(PROMGEN=tests.SETTINGS)
+    def test_token_get_allowed(self):
+        admin = User.objects.get(username="admin")
+        token = models.AuthToken.objects.filter(user=admin).first().token_key
+        response = self.client.get("/api/v1/targets", HTTP_AUTHORIZATION=f"Token {token}")
+        self.assertEqual(response.status_code, 200)
+
+    @override_settings(PROMGEN=tests.SETTINGS)
     def test_accept_header_ignored(self):
-        self.force_login(username="demo")
+        self.force_login(username="admin")
         response = self.client.get("/api/v1/rules", HTTP_ACCEPT="application/x-yaml")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response["Content-Type"], "application/x-yaml")

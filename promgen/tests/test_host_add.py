@@ -5,20 +5,19 @@ from django.urls import reverse
 from guardian.shortcuts import assign_perm
 
 from promgen import models, validators
-from promgen.middleware import get_current_user
 from promgen.tests import PromgenTest
 
 
 class HostTests(PromgenTest):
     def setUp(self):
-        self.force_login(username="demo")
+        self.user = self.force_login(username="demo")
 
     # For our first two tests, we just want to make sure that both newline
     # separated and comma separated work, but are not necessarily testing
     # valid/invalid hostnames
     def test_newline(self):
         assign_perm(
-            "promgen.project_editor", get_current_user(), get_object_or_404(models.Project, pk=1)
+            "promgen.project_editor", self.user, get_object_or_404(models.Project, pk=1)
         )
         self.client.post(
             reverse("hosts-add", args=[1]),
@@ -29,7 +28,7 @@ class HostTests(PromgenTest):
 
     def test_comma(self):
         assign_perm(
-            "promgen.project_editor", get_current_user(), get_object_or_404(models.Project, pk=1)
+            "promgen.project_editor", self.user, get_object_or_404(models.Project, pk=1)
         )
         self.client.post(
             reverse("hosts-add", args=[1]),

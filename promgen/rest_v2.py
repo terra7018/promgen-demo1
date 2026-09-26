@@ -1141,11 +1141,14 @@ class ProjectViewSet(
                     )
                 raise ValidationError(validation_errors)
 
+        if owner_changed:
+            assign_perm("project_admin", new_owner, project)
+
         super().perform_update(serializer)
 
         if owner_changed:
-            assign_perm("project_admin", new_owner, project)
             remove_perm("project_admin", original_owner, project)
+            signals.add_default_owner_subscription(project, new_owner)
 
     def destroy(self, request, *args, **kwargs):
         project = self.get_object()
@@ -1372,6 +1375,7 @@ class ServiceViewSet(
         if owner_changed:
             assign_perm("service_admin", new_owner, service)
             remove_perm("service_admin", original_owner, service)
+            signals.add_default_owner_subscription(service, new_owner)
 
     def destroy(self, request, *args, **kwargs):
         service = self.get_object()

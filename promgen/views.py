@@ -52,6 +52,7 @@ from promgen import (
     util,
 )
 from promgen.forms import GroupMemberForm, UserPermissionForm
+from promgen.middleware import set_current_user
 from promgen.mixins import PromgenGuardianPermissionMixin
 from promgen.shortcuts import resolve_domain
 
@@ -1426,6 +1427,13 @@ class _IgnoreAcceptNegotiation(DefaultContentNegotiation):
 
 class _LegacyApiView(APIView):
     content_negotiation_class = _IgnoreAcceptNegotiation
+
+    def initial(self, request, *args, **kwargs):
+        # DRF authentication (e.g. token auth) runs in APIView.initial, so we
+        # refresh the thread-local user used by audit logging here. The
+        # middleware only sees the Django-session user.
+        super().initial(request, *args, **kwargs)
+        set_current_user(request.user)
 
 
 class ApiConfig(_LegacyApiView):

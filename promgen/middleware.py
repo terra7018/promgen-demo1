@@ -52,8 +52,7 @@ class PromgenMiddleware:
         prefetch_related_objects([request.site], "rule_set")
 
         # Get our logged in user to use with our audit logging plugin
-        if request.user.is_authenticated:
-            _user.value = request.user
+        set_current_user(request.user)
 
         response = self.get_response(request)
 
@@ -72,6 +71,10 @@ class PromgenMiddleware:
 
 def get_current_user():
     return getattr(_user, "value", None)
+
+
+def set_current_user(user):
+    _user.value = user if user is not None and user.is_authenticated else None
 
 
 class PromgenMonitoringMiddleware:

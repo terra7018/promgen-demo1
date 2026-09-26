@@ -25,7 +25,7 @@ from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
 from django.urls import reverse
-from django.utils.safestring import mark_safe
+from django.utils.html import format_html, format_html_join
 from django.utils.translation import gettext as _
 from django.views.generic import DetailView, ListView, UpdateView, View
 from django.views.generic.base import RedirectView, TemplateView
@@ -2099,17 +2099,20 @@ class PermissionDelete(PromgenGuardianPermissionMixin, View):
             The previous owner (John Smith) had its permissions removed.
         """
 
-        projects = "<ul v-pre>" + "".join(f"<li>{p}</li>" for p in projects) + "</ul>"
-        msg = _(
-            "Transferred ownership of these projects to the parent service's owner ({owner}):"
-            + "{projects}"
-            + "The previous owner ({previous_owner}) had its permissions removed."
-        ).format(
+        projects = format_html(
+            "<ul v-pre>{}</ul>",
+            format_html_join("", "<li>{}</li>", ((p,) for p in projects)),
+        )
+        return format_html(
+            _(
+                "Transferred ownership of these projects to the parent service's owner ({owner}):"
+                + "{projects}"
+                + "The previous owner ({previous_owner}) had its permissions removed."
+            ),
             owner=self.get_object().owner.username,
             projects=projects,
             previous_owner=previous_owner,
         )
-        return mark_safe(msg)
 
 
 class GroupList(LoginRequiredMixin, ListView):

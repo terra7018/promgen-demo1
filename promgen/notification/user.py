@@ -50,9 +50,13 @@ class NotificationUser(NotificationBase):
 
     def _send(self, address, data):
         user = User.objects.get(pk=address)
+        errors = []
         for sender in models.Sender.objects.filter(obj=user, enabled=True):
             try:
                 sender.driver._send(sender.value, data)
-            except Exception:
+            except Exception as e:
                 logger.exception("Error sending with %s", sender)
+                errors.append(e)
+        if errors:
+            raise errors[0]
         return True

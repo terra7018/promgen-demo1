@@ -85,3 +85,36 @@ class UserSplayTest(tests.PromgenTest):
         self.assertCount(models.AlertError, 0, "No failed alerts")
 
         self.assertEqual(mock_email.call_count, 0, "Should not call email")
+
+
+class UserSendTest(tests.PromgenTest):
+    def setUp(self):
+        self.user = self.force_login(username="demo")
+        self.data = tests.Data("examples", "alertmanager.json").json()
+        # Only test against the senders created within each test
+        models.Sender.objects.update(enabled=False)
+
+    @override_settings(PROMGEN=tests.SETTINGS)
+    @mock.patch("promgen.notification.email.send_mail")
+    @mock.patch("promgen.util.post")
+    def test_send_success(self, mock_post, mock_email):
+        NotificationLineNotify.create(obj=self.user, value="#foo", owner=self.user)
+        NotificationEmail.create(obj=self.user, value="foo@bar.example", owner=self.user)
+
+        self.assertTrue(NotificationUser()._send(str(self.user.pk), self.data))
+        self.assertEqual(mock_post.call_count, 1, "Called LINE Notify")
+        self.assertEqual(mock_email.call_count, 1, "Called email")
+
+    @override_settings(PROMGEN=tests.SETTINGS)
+    @mock.patch("promgen.notification.email.send_mail")
+    @mock.patch("promgen.util.post")
+    def test_send_failure_propagates(self, mock_post, mock_email):
+        mock_post.side_effect = RuntimeError("LINE Notify down")
+        NotificationLineNotify.create(obj=self.user, value="#foo", owner=self.user)
+        NotificationEmail.create(obj=self.user, value="foo@bar.example", owner=self.user)
+
+        with self.assertRaisesMessage(RuntimeError, "LINE Notify down"):
+            NotificationUser()._send(str(self.user.pk), self.data)
+        # Remaining senders are still attempted before the failure is raised
+        self.assertEqual(mock_post.call_count, 1, "Called LINE Notify")
+        self.assertEqual(mock_email.call_count, 1, "Still called email")

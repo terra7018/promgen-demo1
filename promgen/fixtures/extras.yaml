@@ -18,6 +18,12 @@
   fields:
     created: 2022-06-06
     body: "{}"
+- model: promgen.alertlabel
+  pk: 1
+  fields:
+    alert: 1
+    name: Service
+    value: test-service
 - model: promgen.host
   pk: 1
   fields:

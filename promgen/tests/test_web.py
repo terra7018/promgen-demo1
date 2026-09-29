@@ -89,7 +89,16 @@ class WebTests(PromgenTest):
         # so we expect this page to redirect to 302
         ("import", views.Import, {"status_code": 302}),
         ("alert-list", views.AlertList, {}),
-        ("alert-detail", views.AlertDetail, {"pk": 1}),
+        (
+            "alert-detail",
+            views.AlertDetail,
+            {
+                "pk": 1,
+                "permission": "service_viewer",
+                "model": models.Service,
+                "permission_object_pk": 1,
+            },
+        ),
         ("metrics", views.Metrics, {}),
     ]
 
@@ -472,3 +481,28 @@ class WebTests(PromgenTest):
         self.assertNotIn(payload, warnings[0], "Raw HTML payload must not appear in message")
         self.assertIn(escape(payload), warnings[0], "Project name is HTML-escaped in message")
         self.assertIn("<ul v-pre><li>", warnings[0], "Message markup is preserved")
+
+    def test_alert_detail_scoped_to_accessible_objects(self):
+        service_alert = models.Alert.objects.create(body="{}")
+        service_alert.alertlabel_set.create(name="Service", value="other-service")
+        project_alert = models.Alert.objects.create(body="{}")
+        project_alert.alertlabel_set.create(name="Project", value="another-project")
+        project_alert.alertlabel_set.create(name="Service", value="other-service")
+        unlabeled_alert = models.Alert.objects.create(body="{}")
+
+        def status(alert):
+            return self.client.get(reverse("alert-detail", kwargs={"pk": alert.pk})).status_code
+
+        for alert in (service_alert, project_alert, unlabeled_alert):
+            self.assertEqual(status(alert), 404, "No access without permissions")
+
+        assign_perm("project_viewer", self.user, models.Project.objects.get(name="another-project"))
+        self.assertEqual(status(service_alert), 404, "Project access does not grant service alert")
+        self.assertEqual(status(project_alert), 200, "Project access grants project alert")
+
+        assign_perm("service_viewer", self.user, models.Service.objects.get(name="other-service"))
+        self.assertEqual(status(service_alert), 200, "Service access grants service alert")
+        self.assertEqual(status(unlabeled_alert), 404)
+
+        self.force_login(username="admin")
+        self.assertEqual(status(unlabeled_alert), 200, "Superuser can view all alerts")

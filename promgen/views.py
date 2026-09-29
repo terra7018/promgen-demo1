@@ -1539,21 +1539,27 @@ class AlertList(LoginRequiredMixin, ListView):
                 else:
                     qs = qs.filter(alertlabel__name=key, alertlabel__value=value)
 
-        # If the user is not a superuser, we need to filter the alerts by the user's permissions
-        if not self.request.user.is_superuser:
-            services = permissions.get_accessible_services_for_user(self.request.user)
-            projects = permissions.get_accessible_projects_for_user(self.request.user)
+        return _filter_alerts_for_user(qs, self.request.user)
 
-            qs = qs.filter(
-                Q(alertlabel__name="Service", alertlabel__value__in=services.values_list("name"))
-                | Q(alertlabel__name="Project", alertlabel__value__in=projects.values_list("name"))
-            )
 
+def _filter_alerts_for_user(qs, user):
+    if user.is_superuser:
         return qs
+
+    services = permissions.get_accessible_services_for_user(user)
+    projects = permissions.get_accessible_projects_for_user(user)
+    labels = models.AlertLabel.objects.filter(
+        Q(name="Service", value__in=services.values_list("name"))
+        | Q(name="Project", value__in=projects.values_list("name"))
+    )
+    return qs.filter(pk__in=labels.values("alert_id"))
 
 
 class AlertDetail(LoginRequiredMixin, DetailView):
     model = models.Alert
+
+    def get_queryset(self):
+        return _filter_alerts_for_user(super().get_queryset(), self.request.user)
 
     def get_context_data(self, **kwargs):
         data = super().get_context_data(**kwargs)

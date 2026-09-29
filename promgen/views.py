@@ -48,6 +48,7 @@ from promgen import (
     permissions,
     plugins,
     prometheus,
+    proxy,
     signals,
     tasks,
     util,
@@ -55,7 +56,6 @@ from promgen import (
 from promgen.forms import GroupMemberForm, UserPermissionForm
 from promgen.middleware import set_current_user
 from promgen.mixins import PromgenGuardianPermissionMixin
-from promgen.shortcuts import resolve_domain
 
 logger = logging.getLogger(__name__)
 
@@ -1900,11 +1900,14 @@ class RuleTest(LoginRequiredMixin, View):
         query = macro.rulemacro(rule, request.POST["query"])
         # Since our rules affect all servers we use Promgen's proxy-query to test our rule
         # against all the servers at once
-        url = resolve_domain("proxy-query")
+        path = reverse("proxy-query") + "?" + urllib.parse.urlencode({"query": query})
 
-        logger.debug("Querying %s with %s", url, query)
+        logger.debug("Querying %s", path)
         start = time.time()
-        result = util.get(url, {"query": query}).json()
+        try:
+            result = proxy.query_shards(path)
+        except requests.exceptions.HTTPError as e:
+            result = e.response.json()
         result["duration"] = datetime.timedelta(seconds=(time.time() - start))
         result["query"] = query
 

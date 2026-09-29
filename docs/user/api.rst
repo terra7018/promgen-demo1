@@ -7,6 +7,9 @@ Prometheus Proxy API
 Promgen provides a simple proxy api to proxy certain requests across all managed
 Prometheus nodes. See the `Prometheus API <https://prometheus.io/docs/prometheus/latest/querying/api/>`__ for more details
 
+These endpoints require authentication, either with a logged-in session or with
+an API token passed as ``Authorization: Token <token>``.
+
 
 .. http:get:: /api/v1/label/(string:labelname)/values
 

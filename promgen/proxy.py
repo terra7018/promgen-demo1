@@ -8,6 +8,7 @@ from http import HTTPStatus
 from urllib.parse import urljoin
 
 import requests
+from django.contrib.auth.mixins import LoginRequiredMixin
 from django.http import HttpResponse, JsonResponse
 from django.utils.translation import gettext as _
 from django.views.generic import View
@@ -22,7 +23,43 @@ from promgen import permissions as promgen_permissions
 logger = logging.getLogger(__name__)
 
 
-class PrometheusProxy(View):
+def proxy_shards(path, headers=None):
+    futures = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+        for shard in models.Shard.objects.filter(proxy=True):
+            shard_headers = dict(headers or {})
+            if shard.authorization:
+                shard_headers["Authorization"] = shard.authorization
+            futures.append(
+                executor.submit(
+                    util.get,
+                    urljoin(shard.url, path),
+                    headers=shard_headers,
+                )
+            )
+        yield from concurrent.futures.as_completed(futures)
+
+
+def query_shards(path, headers=None):
+    """
+    Run an instant query against every proxy-enabled shard and merge the results.
+
+    Raises HTTPError if any shard returns an error response.
+    """
+    data = []
+    resultType = None
+    for future in proxy_shards(path, headers):
+        result = future.result()
+        result.raise_for_status()
+        _json = result.json()
+        logger.debug("Appending data from %s", result.url)
+        data += _json["data"]["result"]
+        resultType = _json["data"]["resultType"]
+    return {"status": "success", "data": {"resultType": resultType, "result": data}}
+
+
+class PrometheusProxy(APIView):
+    permission_classes = [permissions.IsAuthenticated]
     proxy_headers = {"HTTP_REFERER": "Referer"}
 
     @property
@@ -38,23 +75,10 @@ class PrometheusProxy(View):
         }
 
     def proxy(self, request):
-        futures = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
-            for shard in models.Shard.objects.filter(proxy=True):
-                headers = self.request_headers
-                if shard.authorization:
-                    headers["Authorization"] = shard.authorization
-                futures.append(
-                    executor.submit(
-                        util.get,
-                        urljoin(shard.url, request.get_full_path_info()),
-                        headers=headers,
-                    )
-                )
-            yield from concurrent.futures.as_completed(futures)
+        yield from proxy_shards(request.get_full_path_info(), self.request_headers)
 
 
-class ProxyGraph(TemplateView):
+class ProxyGraph(LoginRequiredMixin, TemplateView):
     template_name = "promgen/graph.html"
 
     def get_context_data(self, **kwargs):
@@ -139,22 +163,10 @@ class ProxyQueryRange(PrometheusProxy):
 
 class ProxyQuery(PrometheusProxy):
     def get(self, request):
-        data = []
-        resultType = None
-        for future in self.proxy(request):
-            try:
-                result = future.result()
-                result.raise_for_status()
-                _json = result.json()
-                logger.debug("Appending data from %s", result.url)
-                data += _json["data"]["result"]
-                resultType = _json["data"]["resultType"]
-            except HTTPError:
-                return util.proxy_error(result)
-
-        return JsonResponse(
-            {"status": "success", "data": {"resultType": resultType, "result": data}}
-        )
+        try:
+            return JsonResponse(query_shards(request.get_full_path_info(), self.request_headers))
+        except HTTPError as e:
+            return util.proxy_error(e.response)
 
 
 class ProxyAlerts(View):

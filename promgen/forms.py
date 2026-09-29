@@ -30,7 +30,11 @@ class ImportConfigForm(forms.Form):
     config = forms.CharField(
         widget=forms.Textarea(attrs={"rows": 5, "class": "form-control"}), required=False
     )
-    url = forms.CharField(widget=forms.TextInput(attrs={"class": "form-control"}), required=False)
+    url = forms.CharField(
+        widget=forms.TextInput(attrs={"class": "form-control"}),
+        required=False,
+        validators=[validators.egress_url],
+    )
     file_field = forms.FileField(
         widget=forms.FileInput(attrs={"class": "form-control"}), required=False
     )

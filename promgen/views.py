@@ -1821,7 +1821,11 @@ class Import(mixins.PromgenPermissionMixin, FormView):
             config = data["file_field"].read().decode("utf8")
         elif data.get("url"):
             messages.info(self.request, "Importing config from url")
-            response = util.get(data["url"])
+            try:
+                response = util.egress_get(data["url"])
+            except util.EgressError as e:
+                form.add_error("url", str(e))
+                return self.form_invalid(form)
             response.raise_for_status()
             config = response.text
         elif data.get("config"):

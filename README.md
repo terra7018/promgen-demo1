@@ -77,7 +77,7 @@ docker run --rm -v ~/.config/promgen:/etc/promgen/ -v /etc/prometheus:/etc/prome
 docker-compose up -d
 # Database migration to populate with initial data
 docker-compose run web docker-compose-bootstrap
-# If you want to create a different admin user
+# Create an initial admin user
 docker-compose run web createsuperuser
 # Now you should be able to open the demo environment in your browser
 ```

@@ -36,6 +36,55 @@ class RouteTests(tests.PromgenTest):
         self.assertCount(models.Host, 4, "Import three hosts (Fixture has one host)")
 
     @override_settings(PROMGEN=TEST_SETTINGS)
+    @mock.patch("requests.Session.get")
+    def test_import_url_blocked(self, mock_get):
+        self.add_user_permissions(
+            "promgen.change_rule", "promgen.change_site", "promgen.change_exporter"
+        )
+        for url in [
+            "http://169.254.169.254/latest/meta-data/",
+            "http://127.0.0.1:8080/",
+            "file:///etc/passwd",
+        ]:
+            with self.subTest(url=url):
+                response = self.client.post(reverse("import"), {"url": url})
+                self.assertRoute(response, views.Import, 200, "Import form rejected")
+                self.assertIn("url", response.context["form"].errors)
+        mock_get.assert_not_called()
+
+    @override_settings(PROMGEN=TEST_SETTINGS)
+    @override_settings(CELERY_TASK_ALWAYS_EAGER=True)
+    @mock.patch("promgen.signals._trigger_write_config")
+    @mock.patch("promgen.tasks.reload_prometheus")
+    @mock.patch("requests.Session.get")
+    @mock.patch("promgen.util.resolve_hostname")
+    def test_import_url(self, mock_resolve, mock_get, mock_write, mock_reload):
+        self.add_user_permissions(
+            "promgen.change_rule", "promgen.change_site", "promgen.change_exporter"
+        )
+        mock_resolve.return_value = [ipaddress.ip_address("93.184.216.34")]
+        mock_get.return_value = requests.Response()
+        mock_get.return_value.status_code = 200
+        mock_get.return_value._content = TEST_IMPORT.encode()
+
+        response = self.client.post(reverse("import"), {"url": "http://config.example.com/"})
+        self.assertRoute(response, views.Import, 302, "Redirect to imported object")
+        mock_get.assert_called_once_with(
+            "http://config.example.com/", allow_redirects=False, headers=mock.ANY
+        )
+        self.assertCount(models.Project, 4, "Import two projects")
+
+        # DNS rebinding between form validation and the request is still blocked
+        mock_resolve.side_effect = [
+            [ipaddress.ip_address("93.184.216.34")],
+            [ipaddress.ip_address("169.254.169.254")],
+        ]
+        response = self.client.post(reverse("import"), {"url": "http://config.example.com/"})
+        self.assertRoute(response, views.Import, 200, "Import form rejected")
+        self.assertIn("url", response.context["form"].errors)
+        mock_get.assert_called_once()
+
+    @override_settings(PROMGEN=TEST_SETTINGS)
     @override_settings(CELERY_TASK_ALWAYS_EAGER=True)
     @mock.patch("promgen.signals._trigger_write_config")
     @mock.patch("promgen.tasks.reload_prometheus")

@@ -202,6 +202,17 @@ def egress_post(url, **kwargs):
     return post(url, session=session, **kwargs)
 
 
+def egress_get(url, **kwargs):
+    """
+    GET a user supplied destination after validating it
+    """
+    session = egress_session(url)
+    kwargs.setdefault("allow_redirects", False)
+    headers = kwargs.setdefault("headers", {})
+    headers["User-Agent"] = USER_AGENT
+    return session.get(url, **kwargs)
+
+
 def egress_scrape(url, **kwargs):
     """
     Scrape a user supplied target after validating it
